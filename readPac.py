@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Date: 2013-12-08
@@ -321,10 +321,8 @@ def loadSubtitle(subtitle_file, codePage):
     """
 
     with open(subtitle_file, 'rb') as inf:
-        block = inf.read()  # read(1024)
-        real_bytes = []
-        for ch in block:
-            real_bytes.append(ch)
+        # Read raw bytes; treat as a bytes object in Python 3
+        real_bytes = inf.read()
 
     index = 0
     all_pars = []
@@ -348,7 +346,7 @@ def normalizeText(text):
     rep = {'çs': 'š', 'çS': 'Š', 'çz': 'ž',
            'çZ': 'Ž', 'çc': 'č', 'çC': 'Č',
            '€': '', '，': '', '？': '', '…': ''}
-    rep = dict((re.escape(k), v) for k, v in rep.iteritems())
+    rep = {re.escape(k): v for k, v in rep.items()}
     pattern = re.compile("|".join(rep.keys()))
     text = pattern.sub(lambda m: rep[re.escape(m.group(0))], text)
 
@@ -359,8 +357,9 @@ def getTimeCode(timeCodeIndex, byte_list):
     """Extract time code"""
 
     if timeCodeIndex > 0:
-        highPart = ord(byte_list[timeCodeIndex]) + ord(byte_list[timeCodeIndex + 1]) * 256
-        lowPart = ord(byte_list[timeCodeIndex + 2]) + ord(byte_list[timeCodeIndex + 3]) * 256
+        # byte_list is a bytes-like object; elements are ints in Python 3
+        highPart = byte_list[timeCodeIndex] + byte_list[timeCodeIndex + 1] * 256
+        lowPart = byte_list[timeCodeIndex + 2] + byte_list[timeCodeIndex + 3] * 256
         highPart = str(highPart).zfill(6)
         lowPart = str(lowPart).zfill(6)
 
@@ -373,7 +372,7 @@ def getTimeCode(timeCodeIndex, byte_list):
 
         milliseconds = int((1000.0 / frameRate) * frames)
 
-        return TimeCode(str(hours).rjust(2,"0"), str(minutes).rjust(2,"0"), str(seconds).rjust(2,"0"), str(milliseconds).rjust(3,"0"))
+        return TimeCode(str(hours).rjust(2, "0"), str(minutes).rjust(2, "0"), str(seconds).rjust(2, "0"), str(milliseconds).rjust(3, "0"))
 
     else:
         return TimeCode(0, 0, 0, 0)
@@ -385,9 +384,17 @@ def decodeBig5(byte_list):
     return big5 char
     """
 
-    zh_char = ''.join(byte_list).decode('big5')
-
-    return zh_char.encode('utf-8')
+    # Ensure we have a bytes object
+    if isinstance(byte_list, (list, tuple)):
+        b = bytes(byte_list)
+    elif isinstance(byte_list, (bytes, bytearray)):
+        b = bytes(byte_list)
+    else:
+        b = bytes([byte_list])
+    try:
+        return b.decode('big5')
+    except UnicodeDecodeError:
+        return ''
 
 
 def getString(encoding, byte_list, index):
@@ -396,12 +403,11 @@ def getString(encoding, byte_list, index):
     return a utf-8 string
     """
 
-    byte = byte_list[index]
+    b = byte_list[index]
     try:
-        char = ''.join(byte).decode(encoding)
-    except UnicodeDecodeError:
-        char = ''
-    return char.encode('utf-8')
+        return bytes([b]).decode(encoding)
+    except Exception:
+        return ''
 
 
 def getUTF8String(encoding, byte_list, index):
@@ -409,6 +415,21 @@ def getUTF8String(encoding, byte_list, index):
     Decode a byte or sequence of bytes (up to 4) with utf-8,
     return a utf-8 string
     """
+
+    # Python 3 path: try 1..4 bytes and decode to str
+    last = ''
+    for length in range(1, 5):
+        chunk = bytes(byte_list[index: index + length])
+        try:
+            char = chunk.decode(encoding)
+            cleaned = char.replace('\u001f', '').replace('\ufeff', '')
+            if cleaned == '':
+                continue
+            return cleaned
+        except UnicodeDecodeError:
+            last = ''
+            continue
+    return last
 
     for idx in range(4):
         byte = byte_list[index: index + idx]
@@ -425,9 +446,47 @@ def getUTF8String(encoding, byte_list, index):
     return char.encode('utf-8')
 
 
+_CYR_MAP = {}
+
+def _init_cyrillic_map():
+    if _CYR_MAP:
+        return
+    for code_str, letter in zip(CyrillicCodes, CyrillicLetters):
+        try:
+            code_int = int(code_str.replace('\\x', ''), 16)
+        except ValueError:
+            continue
+        _CYR_MAP[code_int] = letter
+
 def getCyrillicString(encoding, byte_list, index):
     """Extract Cyrillic string from byte sequence"""
 
+    # Python 3 path using explicit code map
+    _init_cyrillic_map()
+    b = byte_list[index]
+    if isinstance(b, str):
+        # in unlikely case of str, convert to int
+        b = ord(b)
+    if 0x30 <= b <= 0x39:
+        return chr(b)
+    # single byte
+    if b in _CYR_MAP:
+        return _CYR_MAP[b]
+    # try two-byte
+    if len(byte_list) > index + 1:
+        nxt = byte_list[index + 1]
+        if isinstance(nxt, str):
+            nxt = ord(nxt)
+        code = b * 256 + nxt
+        if code in _CYR_MAP:
+            return _CYR_MAP[code]
+
+    try:
+        return bytes([b]).decode('latin-1')
+    except Exception:
+        return ''
+
+    # Legacy code path (Python 2 style) below
     b = byte_list[index]
     if b >= '\x30' and b <= '\x39':
         return b.decode('ascii').encode('utf-8')
@@ -451,10 +510,7 @@ def getCyrillicString(encoding, byte_list, index):
 
 
 def isTarget(correct, paragraphs, min_thresh):
-    if float(correct) / paragraphs > min_thresh:
-        return True
-    else:
-        return False
+    return float(correct) / paragraphs > min_thresh
 
 
 def isEncoding(paragraphs, lang):
@@ -484,8 +540,9 @@ def isEncoding(paragraphs, lang):
         try:
             # Remove punctuation, numbers, euro, and space from text
             removables = string.punctuation + string.digits
-            remove_punct_map = dict((ord(char), None) for char in (removables))
-            text = ''.join([text.decode('utf-8').translate(remove_punct_map)])
+            remove_punct_map = {ord(char): None for char in removables}
+            # entry.text is already str in Python 3
+            text = text.translate(remove_punct_map)
             text = text.replace(' ', '')
 
             # Extract only specific characters from text
@@ -504,8 +561,8 @@ def isEncoding(paragraphs, lang):
 
             # Ratio of chars in unicode block
             if float(len(text)) == 0:
-                 print "Could not determine character encoding from file"
-                 sys.exit(1)
+                print("Could not determine character encoding from file")
+                sys.exit(1)
             
             ratio = float(len(chars)) / float(len(text))
 
@@ -520,8 +577,6 @@ def isEncoding(paragraphs, lang):
                 if ratio >= 0.90:
                     isLang = True
                 else:
-                    #print 'Orig: ', text.encode('utf-8')
-                    #print 'Char: ', chars.encode('utf-8')
                     isLang = False
 
             if isLang:
@@ -544,13 +599,9 @@ def getPacParagraph(index, real_bytes, codePage):
         index += 1
         if index + 20 >= len(real_bytes):
             return None
-        if real_bytes[index] == '\xfe' and \
-           real_bytes[index - 15] == '\x60' or \
-           real_bytes[index - 15] == '\x61':
+        if real_bytes[index] == 0xFE and (real_bytes[index - 15] == 0x60 or real_bytes[index - 15] == 0x61):
             con = False
-        if real_bytes[index] == '\xfe' and \
-           real_bytes[index - 12] == '\x60' or \
-           real_bytes[index - 12] == '\x61':
+        if real_bytes[index] == 0xFE and (real_bytes[index - 12] == 0x60 or real_bytes[index - 12] == 0x61):
             con = False
 
     feIndex = index
@@ -563,37 +614,37 @@ def getPacParagraph(index, real_bytes, codePage):
     p = Paragraph()
     timeStartIndex = feIndex - 15
 
-    if real_bytes[timeStartIndex] == '\x60':
+    if real_bytes[timeStartIndex] == 0x60:
         p.startTime = getTimeCode(timeStartIndex + 1, real_bytes)
         p.endTime = getTimeCode(timeStartIndex + 5, real_bytes)
 
-    elif real_bytes[timeStartIndex + 3] == '\x60':
+    elif real_bytes[timeStartIndex + 3] == 0x60:
         timeStartIndex += 3
         p.startTime = getTimeCode(timeStartIndex + 1, real_bytes)
         p.endTime = getTimeCode(timeStartIndex + 5, real_bytes)
     else:
         return None
 
-    textLength = ord(real_bytes[timeStartIndex + 9]) + ord(real_bytes[timeStartIndex + 10]) * 256
+    textLength = real_bytes[timeStartIndex + 9] + real_bytes[timeStartIndex + 10] * 256
     maxIndex = timeStartIndex + 10 + textLength
 
     string_buffer = ''
     index = feIndex + 3
-    preTextCode = ''.join(real_bytes[index + 1: index + 4])
+    preTextCode = bytes(real_bytes[index + 1: index + 4]).decode('latin-1', errors='ignore')
 
     if preTextCode == 'W16':
         index += 5
     while index < len(real_bytes) and index <= maxIndex:
         if preTextCode == 'W16':
-            if real_bytes[index] == '\xfe':
+            if real_bytes[index] == 0xFE:
                 string_buffer += ' '
-                preTextCode = ''.join(real_bytes[index + 4: index + 7])
+                preTextCode = bytes(real_bytes[index + 4: index + 7]).decode('latin-1', errors='ignore')
                 if preTextCode == 'W16':
                     index += 7
                 index += 2
             else:
-                if ord(real_bytes[index]) == 0:
-                    text = ''.join(real_bytes[index + 1: index + 2])
+                if real_bytes[index] == 0:
+                    text = bytes(real_bytes[index + 1: index + 2]).decode('latin-1', errors='ignore')
                     string_buffer += text
                 else:
                     # Should be Chinese
@@ -603,10 +654,10 @@ def getPacParagraph(index, real_bytes, codePage):
 
                 index += 1
 
-        elif real_bytes[index] == '\xff':
+        elif real_bytes[index] == 0xFF:
             string_buffer += ' '
 
-        elif real_bytes[index] == '\xfe':
+        elif real_bytes[index] == 0xFE:
             string_buffer += ' '
             index += 2
 
@@ -615,11 +666,11 @@ def getPacParagraph(index, real_bytes, codePage):
             latin_char = getString('iso-8859-1', real_bytes, index)
             string_buffer += latin_char
         elif codePage == 'arabic':
-            print 'Not currently supported'
-            exit()
+            print('Not currently supported')
+            sys.exit(1)
         elif codePage == 'hebrew':
-            print 'Not currently supported'
-            exit()
+            print('Not currently supported')
+            sys.exit(1)
         elif codePage == 'cyrillic':
             cyril_char = getCyrillicString('iso-8859-5', real_bytes, index)
             string_buffer += cyril_char
@@ -665,13 +716,12 @@ def writeOut(paragraphs, outForm, file):
             i += 1
 
     if file:
-        target = open(file, 'w')
-        target.write(strRtn)
-        target.close()
+        with open(file, 'w', encoding='utf-8') as target:
+            target.write(strRtn)
     else:
-        print strRtn
+        print(strRtn)
 
-    exit()
+    sys.exit(0)
 
 
 def autoDetect(subtitle_file):
@@ -703,13 +753,13 @@ def main():
     usage = "usage: python readPac.py [options] pac_file"
     availableOutputs = ["SRT","SRT"]
     parser = OptionParser(usage=usage)
-    parser.add_option("-e", "--encoding", dest="codePage",help="encoding: latin, thai, chinese, cyrillic, utf-8")
-    parser.add_option("-t", "--text", action="store_true", dest="textOnly",help="Write out text only")
+    parser.add_option("-e", "--encoding", dest="codePage", help="encoding: latin, thai, chinese, cyrillic, utf-8")
+    parser.add_option("-t", "--text", action="store_true", dest="textOnly", help="Write out text only")
     parser.add_option("-f", "--outformat", dest="outFormat", help="Define output format, options: SRT")
     parser.add_option("-o", "--outfile", dest="outFile", help="Output to file, specify filename")
     (options, args) = parser.parse_args()
-    if options.outFormat.upper() not in availableOutputs:
-        print "Invalid output format: " + options.outFormat
+    if options.outFormat and options.outFormat.upper() not in availableOutputs:
+        print("Invalid output format: " + options.outFormat)
         parser.print_help()
         sys.exit(2)
     elif len(args) == 0:
@@ -733,11 +783,11 @@ def main():
     ##Determine outputs
     ##print options.outFile 
     if options.textOnly:
-         writeOut(paragraphs,"text",options.outFile)
-    elif options.outFormat :
-        writeOut(paragraphs,options.outFormat,options.outFile)
-    else :
-        writeOut(paragraphs,"",options.outFile)
+        writeOut(paragraphs, "text", options.outFile)
+    elif options.outFormat:
+        writeOut(paragraphs, options.outFormat, options.outFile)
+    else:
+        writeOut(paragraphs, "", options.outFile)
 
 
 if __name__ == "__main__":
