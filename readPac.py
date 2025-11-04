@@ -382,10 +382,8 @@ def normalizeText(text):
             last_char = pre_core[-1] if pre_core else ''
             if not (last_char and has_alpha.match(last_char)):
                 # If previous char is end punctuation like question/ellipsis, drop extra dot
-                if last_char in ['?', '！', '！', '？', '!', '…']:
-                    line = pre
-                else:
-                    line = pre + '。'
+                # Otherwise, remove the trailing ASCII '.' (do not convert to '。')
+                line = pre
                 stripped = line.rstrip()
 
         # Remove trailing '.' for ASCII header-like lines (e.g., Story:..., Lang: ...)
