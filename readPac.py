@@ -413,11 +413,9 @@ def getString(encoding, byte_list, index):
 def getUTF8String(encoding, byte_list, index):
     """
     Decode a byte or sequence of bytes (up to 4) with utf-8,
-    return a utf-8 string
+    return a tuple (decoded_text, bytes_consumed).
     """
 
-    # Python 3 path: try 1..4 bytes and decode to str
-    last = ''
     for length in range(1, 5):
         chunk = bytes(byte_list[index: index + length])
         try:
@@ -425,11 +423,11 @@ def getUTF8String(encoding, byte_list, index):
             cleaned = char.replace('\u001f', '').replace('\ufeff', '')
             if cleaned == '':
                 continue
-            return cleaned
+            return cleaned, length
         except UnicodeDecodeError:
-            last = ''
             continue
-    return last
+    # Fallback: consume one byte to progress
+    return '', 1
 
     for idx in range(4):
         byte = byte_list[index: index + idx]
@@ -634,7 +632,7 @@ def getPacParagraph(index, real_bytes, codePage):
 
     if preTextCode == 'W16':
         index += 5
-    while index < len(real_bytes) and index <= maxIndex:
+    while index < len(real_bytes) and index < maxIndex:
         if preTextCode == 'W16':
             if real_bytes[index] == 0xFE:
                 string_buffer += ' '
@@ -646,13 +644,15 @@ def getPacParagraph(index, real_bytes, codePage):
                 if real_bytes[index] == 0:
                     text = bytes(real_bytes[index + 1: index + 2]).decode('latin-1', errors='ignore')
                     string_buffer += text
+                    index += 2
+                    continue
                 else:
                     # Should be Chinese
                     byte_list = real_bytes[index: index + 2]
                     zh_char = decodeBig5(byte_list)
                     string_buffer += zh_char
-
-                index += 1
+                    index += 2
+                    continue
 
         elif real_bytes[index] == 0xFF:
             string_buffer += ' '
@@ -678,7 +678,10 @@ def getPacParagraph(index, real_bytes, codePage):
         elif codePage == 'thai':
             string_buffer += getString('cp874', real_bytes, index)
         elif codePage == 'utf-8' or codePage == 'utf8':
-            string_buffer += getUTF8String('utf-8', real_bytes, index)
+            ch, consumed = getUTF8String('utf-8', real_bytes, index)
+            string_buffer += ch
+            index += consumed
+            continue
         else:
             pass
 
