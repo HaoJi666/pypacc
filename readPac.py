@@ -347,9 +347,40 @@ def normalizeText(text):
            'çZ': 'Ž', 'çc': 'č', 'çC': 'Č',
            '€': '', '，': '', '？': '', '…': ''}
     rep = {re.escape(k): v for k, v in rep.items()}
-    pattern = re.compile("|".join(rep.keys()))
-    text = pattern.sub(lambda m: rep[re.escape(m.group(0))], text)
+    if rep:
+        pattern = re.compile("|".join(rep.keys()))
+        text = pattern.sub(lambda m: rep[re.escape(m.group(0))], text)
 
+    # Normalize whitespace around newlines and collapse excessive blank lines
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n\s*\n+", "\n", text)
+
+    # Per-line cleanup rules
+    lines = text.split("\n")
+    cleaned_lines = []
+
+    cjk_re = re.compile(r"[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]")
+    has_alpha = re.compile(r"[A-Za-z]")
+    header_like = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 \-]*:[ A-Za-z0-9\-]+\.$")
+
+    for raw in lines:
+        line = raw
+        # Drop lone dot lines
+        if line.strip() == ".":
+            continue
+        # Remove trailing '.' for CJK-only lines (to avoid English sentence impact)
+        if line.rstrip().endswith('.') and cjk_re.search(line) and not has_alpha.search(line):
+            line = line.rstrip('.').rstrip()
+        # Remove trailing '.' for ASCII header-like lines (e.g., Story:..., Lang: ...)
+        elif header_like.match(line.strip()):
+            line = line.rstrip('.').rstrip()
+
+        cleaned_lines.append(line)
+
+    text = "\n".join(cleaned_lines)
+    # Final trim of stray spaces at line edges
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
     return text
 
 
@@ -632,10 +663,12 @@ def getPacParagraph(index, real_bytes, codePage):
 
     if preTextCode == 'W16':
         index += 5
-    while index < len(real_bytes) and index < maxIndex:
+    # Ensure we include the last byte in this paragraph (<= maxIndex)
+    while index < len(real_bytes) and index <= maxIndex:
         if preTextCode == 'W16':
             if real_bytes[index] == 0xFE:
-                string_buffer += ' '
+                # Treat control marker as a real newline
+                string_buffer += '\n'
                 preTextCode = bytes(real_bytes[index + 4: index + 7]).decode('latin-1', errors='ignore')
                 if preTextCode == 'W16':
                     index += 7
@@ -655,10 +688,12 @@ def getPacParagraph(index, real_bytes, codePage):
                     continue
 
         elif real_bytes[index] == 0xFF:
-            string_buffer += ' '
+            # FF -> newline between lines
+            string_buffer += '\n'
 
         elif real_bytes[index] == 0xFE:
-            string_buffer += ' '
+            # FE -> newline and skip control payload
+            string_buffer += '\n'
             index += 2
 
         elif codePage == 'latin':
