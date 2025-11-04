@@ -371,12 +371,34 @@ def normalizeText(text):
         # Drop lone dot lines
         if line.strip() == ".":
             continue
-        # Remove trailing '.' for CJK-only lines (to avoid English sentence impact)
-        if line.rstrip().endswith('.') and cjk_re.search(line) and not has_alpha.search(line):
-            line = line.rstrip('.').rstrip()
+
+        stripped = line.rstrip()
+        # CJK lines: handle trailing ASCII dots
+        # Skip normalization if there are 2 or more trailing '.' (preserve '..' or '...')
+        if stripped.endswith('.') and cjk_re.search(line):
+            # count consecutive trailing dots
+            dot_count = 0
+            for ch in reversed(stripped):
+                if ch == '.':
+                    dot_count += 1
+                else:
+                    break
+            if dot_count >= 2:
+                cleaned_lines.append(line)
+                continue
+            pre = stripped[:-1]
+            # Remove common closing quotes/brackets to inspect preceding char
+            pre_core = pre.rstrip('\'\"”’)]}》」』】）〉> ')
+            last_char = pre_core[-1] if pre_core else ''
+            if not (last_char and has_alpha.match(last_char)):
+                # If previous char is end punctuation like question/ellipsis, drop extra dot
+                # Otherwise, remove the trailing ASCII '.' (do not convert to '。')
+                line = pre
+                stripped = line.rstrip()
+
         # Remove trailing '.' for ASCII header-like lines (e.g., Story:..., Lang: ...)
-        elif header_like.match(line.strip()):
-            line = line.rstrip('.').rstrip()
+        if header_like.match(stripped):
+            line = stripped.rstrip('.').rstrip()
 
         cleaned_lines.append(line)
 
