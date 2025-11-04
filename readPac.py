@@ -345,12 +345,15 @@ def normalizeText(text):
 
     rep = {'çs': 'š', 'çS': 'Š', 'çz': 'ž',
            'çZ': 'Ž', 'çc': 'č', 'çC': 'Č',
-           '€': '', '，': '', '？': '', '…': ''}
+           '€': '', '，': '', '？': ''}
     rep = {re.escape(k): v for k, v in rep.items()}
     if rep:
         pattern = re.compile("|".join(rep.keys()))
         text = pattern.sub(lambda m: rep[re.escape(m.group(0))], text)
 
+    # Remove NULs and other control chars (except newline and tab)
+    text = text.replace('\x00', '')
+    text = re.sub(r"[\x01-\x08\x0B\x0C\x0E-\x1F]", "", text)
     # Normalize whitespace around newlines and collapse excessive blank lines
     text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n\s*\n+", "\n", text)
@@ -378,6 +381,8 @@ def normalizeText(text):
         cleaned_lines.append(line)
 
     text = "\n".join(cleaned_lines)
+    # Remove explicit placeholder tokens like <0x00> if present
+    text = text.replace('<0x00>', '')
     # Final trim of stray spaces at line edges
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
@@ -669,10 +674,34 @@ def getPacParagraph(index, real_bytes, codePage):
             if real_bytes[index] == 0xFE:
                 # Treat control marker as a real newline
                 string_buffer += '\n'
-                preTextCode = bytes(real_bytes[index + 4: index + 7]).decode('latin-1', errors='ignore')
-                if preTextCode == 'W16':
-                    index += 7
-                index += 2
+                # Attempt robust sync: scan ahead for start of next W16 text (ASCII with 0x00 prefix or Big5 lead/trail)
+                def _is_big5_lead(b):
+                    return 0x81 <= b <= 0xFE
+                def _is_big5_trail(b):
+                    return (0x40 <= b <= 0x7E) or (0xA1 <= b <= 0xFE)
+                found = False
+                scan = index + 1
+                limit = min(maxIndex, scan + 24)
+                while scan + 1 <= limit and scan + 1 < len(real_bytes):
+                    b0 = real_bytes[scan]
+                    b1 = real_bytes[scan + 1]
+                    if b0 == 0x00 and 0x20 <= b1 <= 0x7E:
+                        index = scan
+                        found = True
+                        break
+                    if _is_big5_lead(b0) and _is_big5_trail(b1):
+                        index = scan
+                        found = True
+                        break
+                    scan += 1
+                if not found:
+                    # Fallback to header-based skip
+                    preTextCode = bytes(real_bytes[index + 4: index + 7]).decode('latin-1', errors='ignore')
+                    if preTextCode == 'W16':
+                        index += 9
+                    else:
+                        index += 2
+                continue
             else:
                 if real_bytes[index] == 0:
                     text = bytes(real_bytes[index + 1: index + 2]).decode('latin-1', errors='ignore')
@@ -692,9 +721,10 @@ def getPacParagraph(index, real_bytes, codePage):
             string_buffer += '\n'
 
         elif real_bytes[index] == 0xFE:
-            # FE -> newline and skip control payload
+            # FE -> newline and skip control payload (2) + trailing byte (1)
             string_buffer += '\n'
-            index += 2
+            index += 3
+            continue
 
         elif codePage == 'latin':
             #latin_char = getString('utf-8', real_bytes, index)
