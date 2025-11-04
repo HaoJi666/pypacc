@@ -373,9 +373,19 @@ def normalizeText(text):
             continue
 
         stripped = line.rstrip()
-        # Replace trailing '.' with Chinese '。' for CJK lines where the
-        # sentence does not end with an English letter (handles embedded Latin words)
+        # CJK lines: handle trailing ASCII dots
+        # Skip normalization if there are 2 or more trailing '.' (preserve '..' or '...')
         if stripped.endswith('.') and cjk_re.search(line):
+            # count consecutive trailing dots
+            dot_count = 0
+            for ch in reversed(stripped):
+                if ch == '.':
+                    dot_count += 1
+                else:
+                    break
+            if dot_count >= 2:
+                cleaned_lines.append(line)
+                continue
             pre = stripped[:-1]
             # Remove common closing quotes/brackets to inspect preceding char
             pre_core = pre.rstrip('\'\"”’)]}》」』】）〉> ')
